@@ -217,11 +217,14 @@ impl Hunks {
         num_lines1: usize,
         num_lines2: usize,
     ) {
+        if lcs_indices.is_empty() {
+            return;
+        }
+
         let mut hunk_start1 = 0;
-        let mut hunk_end1: usize;
         let mut hunk_start2 = 0;
-        let mut hunk_end2: usize;
         let mut prev_val = -2_i32;
+
         for (i, lcs_index) in lcs_indices.iter().enumerate() {
             if (lcs_index == &-1) && (prev_val != -1) {
                 // We reach a new deletion/substitution block
@@ -237,34 +240,28 @@ impl Hunks {
                 && (lcs_index != &(prev_val + 1))
             {
                 // there was an insertion (but no deletion)
-                // no -1 values but a bump in the values, eg [136, 145]
-                hunk_start1 = i;
-                hunk_start2 = (prev_val + 1) as usize;
-                hunk_end1 = i;
-                hunk_end2 = *lcs_index as usize;
-                self.add_hunk(hunk_start1, hunk_end1, hunk_start2, hunk_end2);
+                self.add_hunk(hunk_start1, i, hunk_start2, *lcs_index as usize);
             }
             if (lcs_index != &-1) && (prev_val == -1) {
                 // we reach the end of deletion/substitution block
-                hunk_end1 = i;
-                hunk_end2 = *lcs_index as usize;
-                self.add_hunk(hunk_start1, hunk_end1, hunk_start2, hunk_end2);
+                self.add_hunk(hunk_start1, i, hunk_start2, *lcs_index as usize);
             }
             prev_val = *lcs_index;
         }
 
-        // final hunk: we might have only -1 at the end
-        if lcs_indices[lcs_indices.len() - 1] == -1 {
-            hunk_end1 = num_lines1;
-            hunk_end2 = num_lines2;
-            self.add_hunk(hunk_start1, hunk_end1, hunk_start2, hunk_end2);
-        } else if lcs_indices[lcs_indices.len() - 1] < ((num_lines2 - 1) as i32) {
-            // there might be some insertions after the last lcs block
-            hunk_start1 = num_lines1 - 1;
-            hunk_end1 = num_lines1 - 1;
-            hunk_start2 = (lcs_indices[lcs_indices.len() - 1] + 1) as usize;
-            hunk_end2 = num_lines2;
-            self.add_hunk(hunk_start1, hunk_end1, hunk_start2, hunk_end2);
+        // Handle final states
+        if prev_val == -1 {
+            self.add_hunk(hunk_start1, num_lines1, hunk_start2, num_lines2);
+        } else if let Some(&last_lcs) = lcs_indices.last() {
+            if last_lcs < ((num_lines2 - 1) as i32) {
+                // Handle remaining insertions after last lcs block
+                self.add_hunk(
+                    num_lines1.saturating_sub(1),
+                    num_lines1,
+                    (last_lcs + 1) as usize,
+                    num_lines2,
+                );
+            }
         }
     }
 
@@ -275,14 +272,18 @@ impl Hunks {
         hunk_start2: usize,
         hunk_end2: usize,
     ) {
-        let kind: Change;
-        if hunk_start1 == hunk_end1 {
-            kind = Change::Insert;
-        } else if hunk_start2 == hunk_end2 {
-            kind = Change::Delete;
-        } else {
-            kind = Change::Substitute;
+        if hunk_start1 >= hunk_end1 && hunk_start2 >= hunk_end2 {
+            return;
         }
+
+        let kind = if hunk_start1 == hunk_end1 {
+            Change::Insert
+        } else if hunk_start2 == hunk_end2 {
+            Change::Delete
+        } else {
+            Change::Substitute
+        };
+
         self.hunks.push(Hunk {
             kind,
             ln2_start: hunk_start2,
