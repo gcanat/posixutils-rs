@@ -222,70 +222,74 @@ impl<'a> FileDiff<'a> {
     pub fn histogram_lcs(
         file1: &FileData,
         file2: &FileData,
-        mut x0: usize,
-        mut x1: usize,
-        mut y0: usize,
-        mut y1: usize,
+        x0: usize,
+        x1: usize,
+        y0: usize,
+        y1: usize,
         lcs_indices: &mut Vec<i32>,
     ) {
-        // collect common elements at the beginning
-        while (x0 < x1) && (y0 < y1) && (file1.line(x0) == file2.line(y0)) {
-            lcs_indices[x0] = y0 as i32;
-            x0 += 1;
-            y0 += 1;
-        }
+        let mut stack = vec![(x0, x1, y0, y1)];
+        let mut hist = HashMap::with_capacity((x1 - x0).max(y1 - y0));
 
-        if (x0 == x1) || (y0 == y1) {
-            // we can return early
-            return;
-        }
-
-        // collect common elements at the end
-        while (x0 < x1) && (y0 < y1) && (file1.line(x1 - 1) == file2.line(y1 - 1)) {
-            lcs_indices[x1 - 1] = (y1 - 1) as i32;
-            x1 -= 1;
-            y1 -= 1;
-        }
-
-        // build histogram
-        let mut hist: HashMap<&str, Vec<i32>> = HashMap::new();
-        for i in x0..x1 {
-            if let Some(rec) = hist.get_mut(file1.line(i)) {
-                rec[0] += 1_i32;
-                rec[1] = i as i32;
-            } else {
-                hist.insert(file1.line(i), vec![1, i as i32, 0, -1]);
+        while let Some((mut start_x, mut end_x, mut start_y, mut end_y)) = stack.pop() {
+            // Collect common elements at start
+            while (start_x < end_x)
+                && (start_y < end_y)
+                && (file1.line(start_x) == file2.line(start_y))
+            {
+                lcs_indices[start_x] = start_y as i32;
+                start_x += 1;
+                start_y += 1;
             }
-        }
-        for i in y0..y1 {
-            if let Some(rec) = hist.get_mut(file2.line(i)) {
-                rec[2] += 1_i32;
-                rec[3] = i as i32;
-            } else {
-                hist.insert(file2.line(i), vec![0, -1, 1, i as i32]);
+
+            // Early return conditions
+            if start_x == end_x || start_y == end_y {
+                continue;
             }
-        }
 
-        // find lowest-occurrence item that appears in both files
-        let key = hist
-            .iter()
-            .filter(|(_k, v)| (v[0] > 0) && (v[2] > 0))
-            .min_by(|a, b| {
-                let c = a.1[0] + a.1[2];
-                let d = b.1[0] + b.1[2];
-                c.cmp(&d)
-            })
-            .map(|(k, _v)| *k);
+            // Collect common elements at end
+            while (start_x < end_x)
+                && (start_y < end_y)
+                && (file1.line(end_x - 1) == file2.line(end_y - 1))
+            {
+                lcs_indices[end_x - 1] = (end_y - 1) as i32;
+                end_x -= 1;
+                end_y -= 1;
+            }
 
-        match key {
-            None => {}
-            Some(k) => {
-                let rec = hist.get(k).unwrap();
-                let x1_new = rec[1] as usize;
-                let y1_new = rec[3] as usize;
-                lcs_indices[x1_new] = y1_new as i32;
-                FileDiff::histogram_lcs(file1, file2, x0, x1_new, y0, y1_new, lcs_indices);
-                FileDiff::histogram_lcs(file1, file2, x1_new + 1, x1, y1_new + 1, y1, lcs_indices);
+            hist.clear();
+
+            // Build histogram in a single pass
+            for i in start_x..end_x {
+                hist.entry(file1.line(i))
+                    .and_modify(|e: &mut Vec<i32>| {
+                        e[0] += 1;
+                        e[1] = i as i32;
+                    })
+                    .or_insert_with(|| vec![1, i as i32, 0, -1]);
+            }
+
+            for i in start_y..end_y {
+                hist.entry(file2.line(i))
+                    .and_modify(|e| {
+                        e[2] += 1;
+                        e[3] = i as i32;
+                    })
+                    .or_insert_with(|| vec![0, -1, 1, i as i32]);
+            }
+
+            if let Some((_, rec)) = hist
+                .iter()
+                .filter(|(_, v)| v[0] > 0 && v[2] > 0)
+                .min_by_key(|(_, v)| v[0] + v[2])
+            {
+                let x_mid = rec[1] as usize;
+                let y_mid = rec[3] as usize;
+                lcs_indices[x_mid] = y_mid as i32;
+
+                // Push subproblems to stack instead of recursing
+                stack.push((x_mid + 1, end_x, y_mid + 1, end_y));
+                stack.push((start_x, x_mid, start_y, y_mid));
             }
         }
     }
